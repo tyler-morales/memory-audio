@@ -1,0 +1,21 @@
+{
+  "name": "memory-audio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Audio-first Memory Space — shared voice memories via secret link",
+  "workspaces": [
+    "web",
+    "worker"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w worker",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build -w web && npm run build -w worker",
+    "test": "npm run test -w web && npm run test -w worker",
+    "deploy": "npm run build -w web && npm run deploy -w worker",
+    "db:migrate:local": "npm run db:migrate:local -w worker"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

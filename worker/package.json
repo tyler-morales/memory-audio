@@ -1,0 +1,24 @@
+{
+  "name": "memory-audio-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "wrangler deploy --dry-run --outdir=dist",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply memory-audio --local",
+    "db:migrate:remote": "wrangler d1 migrations apply memory-audio --remote",
+    "test": "vitest run",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "hono": "^4.7.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250317.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.8",
+    "wrangler": "^4.0.0"
+  }
+}
