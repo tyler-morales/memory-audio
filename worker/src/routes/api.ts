@@ -9,6 +9,7 @@ import {
   MAX_AUDIO_BYTES,
   normalizeColor,
   normalizeDisplayName,
+  memoryTitleFromBody,
   stringifyPeaks,
 } from "../lib/ids";
 import {
@@ -16,14 +17,16 @@ import {
   getMemory,
   getSpaceByToken,
   listClips,
+  listEmojiReplies,
   listMembersByIds,
   listReplies,
   putAudio,
   requireMemberId,
   touchMemory,
 } from "../lib/db";
-import { clipPublic, detailMemory, replyPublic, summarizeMemory } from "../lib/mappers";
-import type { ClipRow, MemoryRow, ReplyRow } from "../lib/types";
+import { clipPublic, detailMemory, emojiReplyPublic, replyPublic, summarizeMemory } from "../lib/mappers";
+import { normalizeEmoji, normalizeTapeOffsetMs } from "../lib/emoji";
+import type { ClipRow, EmojiReplyRow, MemoryRow, ReplyRow } from "../lib/types";
 
 export const api = new Hono<{ Bindings: Env }>();
 
@@ -90,8 +93,9 @@ api.get("/spaces/:token/memories", async (c) => {
       const creator = await getMember(c.env.DB, space.id, memory.creator_id);
       const clips = await listClips(c.env.DB, memory.id);
       const replies = await listReplies(c.env.DB, memory.id);
+      const emojiReplies = await listEmojiReplies(c.env.DB, memory.id);
       if (!creator) return null;
-      return summarizeMemory(memory, creator, clips, replies);
+      return summarizeMemory(memory, creator, clips, replies, emojiReplies);
     }),
   );
 
@@ -136,10 +140,49 @@ api.get("/spaces/:token/memories/:memoryId", async (c) => {
 
   const clips = await listClips(c.env.DB, memory.id);
   const replies = await listReplies(c.env.DB, memory.id);
-  const authorIds = [...new Set(replies.map((r) => r.author_id))];
+  const emojiReplies = await listEmojiReplies(c.env.DB, memory.id);
+  const authorIds = [
+    ...new Set([...replies.map((r) => r.author_id), ...emojiReplies.map((r) => r.author_id)]),
+  ];
   const authors = await listMembersByIds(c.env.DB, authorIds);
 
-  return c.json(detailMemory(memory, creator, clips, replies, authors));
+  return c.json(detailMemory(memory, creator, clips, replies, authors, emojiReplies));
+});
+
+api.patch("/spaces/:token/memories/:memoryId", async (c) => {
+  const token = c.req.param("token");
+  const memoryId = c.req.param("memoryId");
+  if (!isValidToken(token)) return c.json({ error: "Invalid token" }, 400);
+  const space = await getSpaceByToken(c.env.DB, token);
+  if (!space) return c.json({ error: "Space not found" }, 404);
+  const memory = await getMemory(c.env.DB, space.id, memoryId);
+  if (!memory) return c.json({ error: "Memory not found" }, 404);
+
+  const memberId = requireMemberId(c);
+  if (!memberId) return c.json({ error: "X-Member-Id required" }, 401);
+  if (memberId !== memory.creator_id) {
+    return c.json({ error: "Only the creator can rename this memory" }, 403);
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+  const title = memoryTitleFromBody(body);
+  if (title == null) return c.json({ error: "title required" }, 400);
+
+  await c.env.DB.prepare(
+    "UPDATE memories SET title = ?, updated_at = datetime('now') WHERE id = ? AND space_id = ?",
+  )
+    .bind(title, memory.id, space.id)
+    .run();
+
+  const updated = await getMemory(c.env.DB, space.id, memory.id);
+  if (!updated) return c.json({ error: "Failed to rename" }, 500);
+
+  return c.json({ id: updated.id, title: updated.title, updatedAt: updated.updated_at });
 });
 
 api.post("/spaces/:token/memories/:memoryId/clips", async (c) => {
@@ -279,6 +322,61 @@ api.put("/spaces/:token/memories/:memoryId/clips/order", async (c) => {
   return c.json({ clips: clips.map(clipPublic) });
 });
 
+api.delete("/spaces/:token/memories/:memoryId/clips/:clipId", async (c) => {
+  const token = c.req.param("token");
+  const memoryId = c.req.param("memoryId");
+  const clipId = c.req.param("clipId");
+  if (!isValidToken(token)) return c.json({ error: "Invalid token" }, 400);
+  const space = await getSpaceByToken(c.env.DB, token);
+  if (!space) return c.json({ error: "Space not found" }, 404);
+  const memory = await getMemory(c.env.DB, space.id, memoryId);
+  if (!memory) return c.json({ error: "Memory not found" }, 404);
+
+  const memberId = requireMemberId(c);
+  if (!memberId) return c.json({ error: "X-Member-Id required" }, 401);
+  if (memberId !== memory.creator_id) {
+    return c.json({ error: "Only the creator can delete clips" }, 403);
+  }
+
+  const clip = await c.env.DB.prepare("SELECT * FROM clips WHERE id = ? AND memory_id = ?")
+    .bind(clipId, memory.id)
+    .first<ClipRow>();
+  if (!clip) return c.json({ error: "Clip not found" }, 404);
+
+  // Drop timed voice + emoji replies anchored to this clip
+  await c.env.DB.prepare("DELETE FROM replies WHERE memory_id = ? AND clip_id = ?")
+    .bind(memory.id, clipId)
+    .run();
+  await c.env.DB.prepare("DELETE FROM emoji_replies WHERE memory_id = ? AND clip_id = ?")
+    .bind(memory.id, clipId)
+    .run();
+
+  await c.env.DB.prepare("DELETE FROM clips WHERE id = ? AND memory_id = ?")
+    .bind(clipId, memory.id)
+    .run();
+
+  // Compact positions
+  const remaining = await listClips(c.env.DB, memory.id);
+  if (remaining.length > 0) {
+    const phase1 = remaining.map((row, i) =>
+      c.env.DB.prepare("UPDATE clips SET position = ? WHERE id = ?").bind(-(i + 1), row.id),
+    );
+    const phase2 = remaining.map((row, i) =>
+      c.env.DB.prepare("UPDATE clips SET position = ? WHERE id = ?").bind(i, row.id),
+    );
+    await c.env.DB.batch([...phase1, ...phase2]);
+  }
+
+  try {
+    await c.env.AUDIO.delete(clip.r2_key);
+  } catch {
+    /* orphan cleanup best-effort */
+  }
+
+  await touchMemory(c.env.DB, memory.id);
+  return c.json({ ok: true });
+});
+
 api.post("/spaces/:token/memories/:memoryId/replies", async (c) => {
   const token = c.req.param("token");
   const memoryId = c.req.param("memoryId");
@@ -380,6 +478,59 @@ api.post("/spaces/:token/memories/:memoryId/replies", async (c) => {
   if (!row) return c.json({ error: "Failed to create reply" }, 500);
 
   return c.json(replyPublic(row, member), 201);
+});
+
+api.post("/spaces/:token/memories/:memoryId/emoji-replies", async (c) => {
+  const token = c.req.param("token");
+  const memoryId = c.req.param("memoryId");
+  if (!isValidToken(token)) return c.json({ error: "Invalid token" }, 400);
+  const space = await getSpaceByToken(c.env.DB, token);
+  if (!space) return c.json({ error: "Space not found" }, 404);
+  const memory = await getMemory(c.env.DB, space.id, memoryId);
+  if (!memory) return c.json({ error: "Memory not found" }, 404);
+
+  const memberId = requireMemberId(c);
+  if (!memberId) return c.json({ error: "X-Member-Id required" }, 401);
+  const member = await getMember(c.env.DB, space.id, memberId);
+  if (!member) return c.json({ error: "Member not found" }, 401);
+
+  let body: { clipId?: string; offsetMs?: number; emoji?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+
+  const emoji = typeof body.emoji === "string" ? normalizeEmoji(body.emoji) : null;
+  if (!emoji) return c.json({ error: "emoji not allowed" }, 400);
+
+  const clipId = typeof body.clipId === "string" && body.clipId.length > 0 ? body.clipId : null;
+  if (!clipId) return c.json({ error: "clipId required" }, 400);
+
+  const clip = await c.env.DB.prepare("SELECT * FROM clips WHERE id = ? AND memory_id = ?")
+    .bind(clipId, memory.id)
+    .first<ClipRow>();
+  if (!clip) return c.json({ error: "Clip not found" }, 400);
+
+  const offsetMs = normalizeTapeOffsetMs(Number(body.offsetMs), clip.duration_ms);
+  if (offsetMs == null) return c.json({ error: "offsetMs required for timed emoji" }, 400);
+
+  const id = createId();
+  await c.env.DB.prepare(
+    `INSERT INTO emoji_replies (id, memory_id, author_id, clip_id, offset_ms, emoji)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(id, memory.id, member.id, clip.id, offsetMs, emoji)
+    .run();
+
+  await touchMemory(c.env.DB, memory.id);
+
+  const row = await c.env.DB.prepare("SELECT * FROM emoji_replies WHERE id = ?")
+    .bind(id)
+    .first<EmojiReplyRow>();
+  if (!row) return c.json({ error: "Failed to create emoji reply" }, 500);
+
+  return c.json(emojiReplyPublic(row, member), 201);
 });
 
 api.get("/audio/:key{.+}", async (c) => {

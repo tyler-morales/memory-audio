@@ -7,6 +7,8 @@ import {
   normalizeDisplayName,
   stringifyPeaks,
   parsePeaks,
+  memoryTitleFromBody,
+  normalizeMemoryTitle,
 } from "../src/lib/ids";
 
 describe("token", () => {
@@ -35,6 +37,30 @@ describe("display name and color", () => {
 
   it("rejects invalid color", () => {
     expect(normalizeColor("red")).toBeNull();
+  });
+});
+
+describe("memory title", () => {
+  it("trims a titled memory", () => {
+    expect(normalizeMemoryTitle("  Sunday breakfast  ")).toBe("Sunday breakfast");
+  });
+
+  it("allows an empty title", () => {
+    expect(normalizeMemoryTitle("   ")).toBe("");
+  });
+
+  it("rejects titles over 80 characters by truncating", () => {
+    expect(normalizeMemoryTitle("a".repeat(81))).toBe("a".repeat(80));
+  });
+
+  it("reads a title from a PATCH body", () => {
+    expect(memoryTitleFromBody({ title: "  Hello  " })).toBe("Hello");
+  });
+
+  it("rejects a PATCH body without a string title", () => {
+    expect(memoryTitleFromBody({})).toBeNull();
+    expect(memoryTitleFromBody({ title: 1 })).toBeNull();
+    expect(memoryTitleFromBody(null)).toBeNull();
   });
 });
 

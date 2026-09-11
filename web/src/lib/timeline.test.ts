@@ -6,7 +6,7 @@ import {
   concatPeaks,
   totalDuration,
 } from "./timeline";
-import { downsamplePeaks, pickRecorderMime } from "./recorder";
+import { downsamplePeaks, extensionForMime, pickRecorderMime } from "./recorder";
 
 describe("absoluteToClipPosition", () => {
   const clips = [
@@ -88,5 +88,15 @@ describe("pickRecorderMime", () => {
     // In node test env MediaRecorder is typically undefined
     const result = pickRecorderMime();
     expect(result === undefined || typeof result === "string").toBe(true);
+  });
+});
+
+describe("extensionForMime", () => {
+  it("maps wav recordings", () => {
+    expect(extensionForMime("audio/wav")).toBe("wav");
+  });
+
+  it("falls back to m4a", () => {
+    expect(extensionForMime("audio/mp4")).toBe("m4a");
   });
 });

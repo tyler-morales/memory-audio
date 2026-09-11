@@ -49,6 +49,20 @@ export function normalizeDisplayName(name: string): string | null {
   return trimmed;
 }
 
+/** Memory titles are optional; empty string keeps the untitled fallback. */
+export const MAX_MEMORY_TITLE_CHARS = 80;
+
+export function normalizeMemoryTitle(title: string): string {
+  return title.trim().slice(0, MAX_MEMORY_TITLE_CHARS);
+}
+
+export function memoryTitleFromBody(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  const title = (body as { title?: unknown }).title;
+  if (typeof title !== "string") return null;
+  return normalizeMemoryTitle(title);
+}
+
 export function parsePeaks(json: string): number[] {
   try {
     const parsed: unknown = JSON.parse(json);

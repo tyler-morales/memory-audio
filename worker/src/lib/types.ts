@@ -22,6 +22,7 @@ export type MemoryRow = {
   id: string;
   space_id: string;
   creator_id: string;
+  title: string;
   created_at: string;
   updated_at: string;
 };
@@ -48,6 +49,16 @@ export type ReplyRow = {
   r2_key: string;
   mime: string;
   peaks_json: string;
+  created_at: string;
+};
+
+export type EmojiReplyRow = {
+  id: string;
+  memory_id: string;
+  author_id: string;
+  clip_id: string;
+  offset_ms: number;
+  emoji: string;
   created_at: string;
 };
 
@@ -80,8 +91,18 @@ export type ReplyPublic = {
   createdAt: string;
 };
 
+export type EmojiReplyPublic = {
+  id: string;
+  author: MemberPublic;
+  clipId: string;
+  offsetMs: number;
+  emoji: string;
+  createdAt: string;
+};
+
 export type MemorySummary = {
   id: string;
+  title: string;
   creator: MemberPublic;
   createdAt: string;
   updatedAt: string;
@@ -89,10 +110,12 @@ export type MemorySummary = {
   clipCount: number;
   replyCount: number;
   noteCount: number;
+  emojiCount: number;
   peaks: number[];
 };
 
 export type MemoryDetail = MemorySummary & {
   clips: ClipPublic[];
   replies: ReplyPublic[];
+  emojiReplies: EmojiReplyPublic[];
 };

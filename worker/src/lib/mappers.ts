@@ -1,6 +1,8 @@
 import type {
   ClipPublic,
   ClipRow,
+  EmojiReplyPublic,
+  EmojiReplyRow,
   MemberPublic,
   MemberRow,
   MemoryDetail,
@@ -46,11 +48,33 @@ export function replyPublic(row: ReplyRow, author: MemberRow): ReplyPublic {
   };
 }
 
+export function emojiReplyPublic(row: EmojiReplyRow, author: MemberRow): EmojiReplyPublic {
+  return {
+    id: row.id,
+    author: memberPublic(author),
+    clipId: row.clip_id,
+    offsetMs: row.offset_ms,
+    emoji: row.emoji,
+    createdAt: row.created_at,
+  };
+}
+
+function unknownAuthor(authorId: string, spaceId: string, createdAt: string): MemberRow {
+  return {
+    id: authorId,
+    space_id: spaceId,
+    display_name: "Unknown",
+    color: "#888888",
+    created_at: createdAt,
+  };
+}
+
 export function summarizeMemory(
   memory: MemoryRow,
   creator: MemberRow,
   clips: ClipRow[],
   replies: ReplyRow[],
+  emojiReplies: EmojiReplyRow[] = [],
 ): MemorySummary {
   const totalDurationMs = clips.reduce((sum, c) => sum + c.duration_ms, 0);
   const noteCount = replies.filter((r) => r.clip_id == null && r.parent_reply_id == null).length;
@@ -59,6 +83,7 @@ export function summarizeMemory(
 
   return {
     id: memory.id,
+    title: memory.title ?? "",
     creator: memberPublic(creator),
     createdAt: memory.created_at,
     updatedAt: memory.updated_at,
@@ -66,6 +91,7 @@ export function summarizeMemory(
     clipCount: clips.length,
     replyCount,
     noteCount,
+    emojiCount: emojiReplies.length,
     peaks,
   };
 }
@@ -76,8 +102,9 @@ export function detailMemory(
   clips: ClipRow[],
   replies: ReplyRow[],
   authors: Map<string, MemberRow>,
+  emojiReplies: EmojiReplyRow[] = [],
 ): MemoryDetail {
-  const summary = summarizeMemory(memory, creator, clips, replies);
+  const summary = summarizeMemory(memory, creator, clips, replies, emojiReplies);
   return {
     ...summary,
     clips: clips
@@ -85,17 +112,13 @@ export function detailMemory(
       .sort((a, b) => a.position - b.position)
       .map(clipPublic),
     replies: replies.map((r) => {
-      const author = authors.get(r.author_id);
-      if (!author) {
-        return replyPublic(r, {
-          id: r.author_id,
-          space_id: memory.space_id,
-          display_name: "Unknown",
-          color: "#888888",
-          created_at: r.created_at,
-        });
-      }
+      const author = authors.get(r.author_id) ?? unknownAuthor(r.author_id, memory.space_id, r.created_at);
       return replyPublic(r, author);
+    }),
+    emojiReplies: emojiReplies.map((row) => {
+      const author =
+        authors.get(row.author_id) ?? unknownAuthor(row.author_id, memory.space_id, row.created_at);
+      return emojiReplyPublic(row, author);
     }),
   };
 }

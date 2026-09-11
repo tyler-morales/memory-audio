@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { JoinSheet } from "../components/JoinSheet";
 import { MemoryCard } from "../components/MemoryCard";
 import {
@@ -18,6 +18,7 @@ export function StackPage() {
   const [member, setMember] = useState<Member | null>(() => loadMember(token));
   const [memories, setMemories] = useState<MemorySummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [spaceMissing, setSpaceMissing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
 
@@ -27,8 +28,16 @@ export function StackPage() {
       const list = await listMemories(token);
       setMemories(list);
       setError(null);
+      setSpaceMissing(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load space");
+      const message = e instanceof Error ? e.message : "Failed to load space";
+      setError(message);
+      const missing =
+        /not found/i.test(message) || /invalid token/i.test(message);
+      setSpaceMissing(missing);
+      if (missing) {
+        setMemories([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -36,27 +45,32 @@ export function StackPage() {
 
   useEffect(() => {
     setMember(loadMember(token));
+    setLoading(true);
     void refresh();
   }, [token, refresh]);
 
   useEffect(() => {
+    if (spaceMissing) return;
     const id = window.setInterval(() => void refresh(), 5000);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [refresh, spaceMissing]);
 
   async function handleJoin(displayName: string, color: string) {
     try {
       const m = await joinSpace(token, displayName, color);
       saveMember(token, m);
       setMember(m);
+      setError(null);
+      await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Join failed");
     }
   }
 
   async function handleNewMemory() {
-    if (!member) return;
+    if (!member || spaceMissing) return;
     setCreating(true);
+    setError(null);
     try {
       const memory = await createMemory(token, member.id);
       navigate(`/s/${token}/m/${memory.id}?capture=1`);
@@ -74,7 +88,6 @@ export function StackPage() {
         await navigator.share({ title: "Memory Space", url });
       } else {
         await navigator.clipboard.writeText(url);
-        setError(null);
         alert("Link copied");
       }
     } catch {
@@ -86,22 +99,40 @@ export function StackPage() {
     <div className="app-shell">
       <header className="top-bar">
         <h1>Memories</h1>
-        <button type="button" className="ghost-btn" onClick={() => void shareLink()}>
-          Share link
-        </button>
+        {!spaceMissing && (
+          <button type="button" className="ghost-btn" onClick={() => void shareLink()}>
+            Share link
+          </button>
+        )}
       </header>
 
       <main className="stack-page">
         {error && (
           <div className="error-banner" role="alert">
             {error}
+            {spaceMissing && (
+              <p style={{ margin: "0.5rem 0 0" }}>
+                This space link is no longer valid (local database was reset).{" "}
+                <Link to="/" style={{ color: "inherit", textDecoration: "underline" }}>
+                  Create a new space
+                </Link>
+              </p>
+            )}
           </div>
         )}
         {loading && <p style={{ color: "var(--text-muted)" }}>Loading…</p>}
-        {!loading && memories.length === 0 && (
+        {!loading && !spaceMissing && memories.length === 0 && !error && (
           <div className="empty-state">
             <p>No memories yet.</p>
             <p>Start a tape. Friends with this link can listen and reply.</p>
+          </div>
+        )}
+        {!loading && !spaceMissing && error && memories.length === 0 && (
+          <div className="empty-state">
+            <p>Couldn’t load memories.</p>
+            <button type="button" className="ghost-btn" onClick={() => void refresh()}>
+              Retry
+            </button>
           </div>
         )}
         {memories.map((m) => (
@@ -109,7 +140,7 @@ export function StackPage() {
         ))}
       </main>
 
-      {member && (
+      {member && !spaceMissing && (
         <button
           type="button"
           className="fab"
@@ -121,7 +152,7 @@ export function StackPage() {
         </button>
       )}
 
-      <JoinSheet open={!member && !loading && !error} onJoin={handleJoin} />
+      <JoinSheet open={!member && !loading && !spaceMissing} onJoin={handleJoin} />
     </div>
   );
 }

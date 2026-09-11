@@ -19,6 +19,7 @@ export function pickRecorderMime(): string | undefined {
 export function extensionForMime(mime: string): string {
   if (mime.includes("webm")) return "webm";
   if (mime.includes("ogg")) return "ogg";
+  if (mime.includes("wav")) return "wav";
   return "m4a";
 }
 
@@ -140,6 +141,10 @@ export class AudioRecorder {
 
   get livePeaks(): number[] {
     return this.peakSamples.slice(-48);
+  }
+
+  get allPeaks(): number[] {
+    return this.peakSamples.slice();
   }
 
   get elapsedMs(): number {

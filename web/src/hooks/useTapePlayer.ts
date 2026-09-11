@@ -6,6 +6,8 @@ type Status = "idle" | "playing" | "paused" | "ended";
 
 /**
  * Sequential playback across spine clips. Never auto-starts.
+ * When the clip list changes (add/delete), keep the current clip if it
+ * still exists; otherwise cue the latest remaining clip — never jump to 0.
  */
 export function useTapePlayer(clips: Clip[]) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -15,13 +17,17 @@ export function useTapePlayer(clips: Clip[]) {
   const statusRef = useRef(status);
   statusRef.current = status;
 
-  const clipsKey = clips.map((c) => c.id).join(",");
+  const clipsRef = useRef(clips);
+  clipsRef.current = clips;
+  const clipIndexRef = useRef(clipIndex);
+  clipIndexRef.current = clipIndex;
+  const activeClipIdRef = useRef<string | null>(clips[0]?.id ?? null);
+  const positionMsRef = useRef(positionMs);
+  positionMsRef.current = positionMs;
+
+  const clipsKey = clips.map((c) => `${c.id}:${c.durationMs}:${c.audioUrl}`).join(",");
 
   useEffect(() => {
-    setClipIndex(0);
-    setPositionMs(0);
-    setStatus("idle");
-
     const audio = new Audio();
     audio.preload = "metadata";
     audioRef.current = audio;
@@ -30,7 +36,9 @@ export function useTapePlayer(clips: Clip[]) {
       const prior = clipsRef.current
         .slice(0, clipIndexRef.current)
         .reduce((s, c) => s + c.durationMs, 0);
-      setPositionMs(prior + audio.currentTime * 1000);
+      const next = prior + audio.currentTime * 1000;
+      positionMsRef.current = next;
+      setPositionMs(next);
     };
 
     const onEnded = () => {
@@ -40,7 +48,9 @@ export function useTapePlayer(clips: Clip[]) {
         void playIndex(next);
       } else {
         setStatus("ended");
-        setPositionMs(totalDuration(clipsRef.current));
+        const end = totalDuration(clipsRef.current);
+        positionMsRef.current = end;
+        setPositionMs(end);
       }
     };
 
@@ -53,13 +63,61 @@ export function useTapePlayer(clips: Clip[]) {
       audio.removeEventListener("ended", onEnded);
       audioRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset player when clip set changes
-  }, [clipsKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const clipsRef = useRef(clips);
-  clipsRef.current = clips;
-  const clipIndexRef = useRef(clipIndex);
-  clipIndexRef.current = clipIndex;
+  useEffect(() => {
+    const list = clipsRef.current;
+    const audio = audioRef.current;
+    if (statusRef.current === "playing") {
+      audio?.pause();
+      setStatus("paused");
+    }
+
+    if (list.length === 0) {
+      activeClipIdRef.current = null;
+      setClipIndex(0);
+      positionMsRef.current = 0;
+      setPositionMs(0);
+      setStatus("idle");
+      return;
+    }
+
+    const prevId = activeClipIdRef.current;
+    let index = prevId ? list.findIndex((c) => c.id === prevId) : -1;
+
+    if (index < 0) {
+      const isFirstLoad = prevId === null;
+      index = isFirstLoad ? 0 : list.length - 1;
+      const startMs = list.slice(0, index).reduce((s, c) => s + c.durationMs, 0);
+      activeClipIdRef.current = list[index]!.id;
+      setClipIndex(index);
+      positionMsRef.current = startMs;
+      setPositionMs(startMs);
+      setStatus(isFirstLoad ? "idle" : "paused");
+      if (audio) {
+        audio.src = list[index]!.audioUrl;
+        audio.currentTime = 0;
+      }
+      return;
+    }
+
+    // Same clip still present — keep absolute position clamped into that clip
+    const startMs = list.slice(0, index).reduce((s, c) => s + c.durationMs, 0);
+    const endMs = startMs + list[index]!.durationMs;
+    const clamped = Math.min(Math.max(positionMsRef.current, startMs), endMs);
+    activeClipIdRef.current = list[index]!.id;
+    setClipIndex(index);
+    positionMsRef.current = clamped;
+    setPositionMs(clamped);
+    if (audio) {
+      if (audio.src !== new URL(list[index]!.audioUrl, window.location.origin).href) {
+        audio.src = list[index]!.audioUrl;
+      }
+      audio.currentTime = (clamped - startMs) / 1000;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clipsKey]);
 
   async function playIndex(index: number, offsetMs = 0) {
     const audio = audioRef.current;
@@ -70,6 +128,7 @@ export function useTapePlayer(clips: Clip[]) {
     }
     audio.currentTime = offsetMs / 1000;
     setClipIndex(index);
+    activeClipIdRef.current = clip.id;
     try {
       await audio.play();
       setStatus("playing");
@@ -81,6 +140,7 @@ export function useTapePlayer(clips: Clip[]) {
   async function play() {
     if (status === "ended" || positionMs >= totalDuration(clipsRef.current)) {
       setPositionMs(0);
+      positionMsRef.current = 0;
       await playIndex(0, 0);
       return;
     }
@@ -104,9 +164,11 @@ export function useTapePlayer(clips: Clip[]) {
   async function seek(ms: number) {
     const mapped = absoluteToClipPosition(clipsRef.current, ms);
     if (!mapped) return;
+    positionMsRef.current = mapped.absoluteMs;
     setPositionMs(mapped.absoluteMs);
     const index = clipsRef.current.findIndex((c) => c.id === mapped.clipId);
     if (index < 0) return;
+    activeClipIdRef.current = mapped.clipId;
     if (statusRef.current === "playing") {
       await playIndex(index, mapped.offsetMs);
     } else {
@@ -119,7 +181,11 @@ export function useTapePlayer(clips: Clip[]) {
         }
         audio.currentTime = mapped.offsetMs / 1000;
       }
-      setStatus(statusRef.current === "ended" ? "paused" : statusRef.current === "idle" ? "paused" : statusRef.current);
+      setStatus(
+        statusRef.current === "ended" || statusRef.current === "idle"
+          ? "paused"
+          : statusRef.current,
+      );
     }
   }
 
@@ -133,8 +199,10 @@ export function useTapePlayer(clips: Clip[]) {
     const startMs = clipsRef.current
       .slice(0, index)
       .reduce((s, c) => s + c.durationMs, 0);
+    positionMsRef.current = startMs;
     setPositionMs(startMs);
     setClipIndex(index);
+    activeClipIdRef.current = clipId;
     const audio = audioRef.current;
     const clip = clipsRef.current[index];
     if (audio && clip) {

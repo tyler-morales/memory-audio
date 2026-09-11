@@ -27,8 +27,18 @@ export type Reply = {
   createdAt: string;
 };
 
+export type EmojiReply = {
+  id: string;
+  author: Member;
+  clipId: string;
+  offsetMs: number;
+  emoji: string;
+  createdAt: string;
+};
+
 export type MemorySummary = {
   id: string;
+  title: string;
   creator: Member;
   createdAt: string;
   updatedAt: string;
@@ -36,12 +46,14 @@ export type MemorySummary = {
   clipCount: number;
   replyCount: number;
   noteCount: number;
+  emojiCount: number;
   peaks: number[];
 };
 
 export type MemoryDetail = MemorySummary & {
   clips: Clip[];
   replies: Reply[];
+  emojiReplies: EmojiReply[];
 };
 
 export const MEMBER_COLORS = [
@@ -115,6 +127,23 @@ export async function getMemory(token: string, memoryId: string): Promise<Memory
   return parseJson(res);
 }
 
+export async function updateMemoryTitle(
+  token: string,
+  memoryId: string,
+  memberId: string,
+  title: string,
+): Promise<{ id: string; title: string; updatedAt: string }> {
+  const res = await fetch(`/api/spaces/${token}/memories/${memoryId}`, {
+    method: "PATCH",
+    headers: {
+      ...memberHeaders(memberId),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ title }),
+  });
+  return parseJson(res);
+}
+
 export async function uploadClip(
   token: string,
   memoryId: string,
@@ -125,7 +154,7 @@ export async function uploadClip(
   mime: string,
 ): Promise<Clip> {
   const form = new FormData();
-  const ext = mime.includes("webm") ? "webm" : "m4a";
+  const ext = mime.includes("webm") ? "webm" : mime.includes("wav") ? "wav" : "m4a";
   form.append("audio", audio, `clip.${ext}`);
   form.append("durationMs", String(durationMs));
   form.append("peaks", JSON.stringify(peaks));
@@ -138,6 +167,19 @@ export async function uploadClip(
   return parseJson(res);
 }
 
+export async function deleteClip(
+  token: string,
+  memoryId: string,
+  memberId: string,
+  clipId: string,
+): Promise<void> {
+  const res = await fetch(`/api/spaces/${token}/memories/${memoryId}/clips/${clipId}`, {
+    method: "DELETE",
+    headers: memberHeaders(memberId),
+  });
+  await parseJson<{ ok: boolean }>(res);
+}
+
 export async function reorderClips(
   token: string,
   memoryId: string,
@@ -146,7 +188,10 @@ export async function reorderClips(
 ): Promise<Clip[]> {
   const res = await fetch(`/api/spaces/${token}/memories/${memoryId}/clips/order`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", ...memberHeaders(memberId) },
+    headers: {
+      ...memberHeaders(memberId),
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({ clipIds }),
   });
   const data = await parseJson<{ clips: Clip[] }>(res);
@@ -182,6 +227,23 @@ export async function uploadReply(
     method: "POST",
     headers: memberHeaders(memberId),
     body: form,
+  });
+  return parseJson(res);
+}
+
+export async function postEmojiReply(
+  token: string,
+  memoryId: string,
+  memberId: string,
+  input: { clipId: string; offsetMs: number; emoji: string },
+): Promise<EmojiReply> {
+  const res = await fetch(`/api/spaces/${token}/memories/${memoryId}/emoji-replies`, {
+    method: "POST",
+    headers: {
+      ...memberHeaders(memberId),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
   });
   return parseJson(res);
 }

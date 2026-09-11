@@ -1,4 +1,4 @@
-import type { Env, MemberRow, MemoryRow, SpaceRow, ClipRow, ReplyRow } from "./types";
+import type { Env, MemberRow, MemoryRow, SpaceRow, ClipRow, ReplyRow, EmojiReplyRow } from "./types";
 
 export async function getSpaceByToken(db: D1Database, token: string): Promise<SpaceRow | null> {
   return db.prepare("SELECT * FROM spaces WHERE token = ?").bind(token).first<SpaceRow>();
@@ -39,6 +39,14 @@ export async function listReplies(db: D1Database, memoryId: string): Promise<Rep
     .prepare("SELECT * FROM replies WHERE memory_id = ? ORDER BY created_at ASC")
     .bind(memoryId)
     .all<ReplyRow>();
+  return result.results ?? [];
+}
+
+export async function listEmojiReplies(db: D1Database, memoryId: string): Promise<EmojiReplyRow[]> {
+  const result = await db
+    .prepare("SELECT * FROM emoji_replies WHERE memory_id = ? ORDER BY created_at ASC")
+    .bind(memoryId)
+    .all<EmojiReplyRow>();
   return result.results ?? [];
 }
 
